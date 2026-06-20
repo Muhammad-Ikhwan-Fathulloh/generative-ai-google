@@ -218,8 +218,10 @@ def store_consolidation(
                 row = db.execute("SELECT connections FROM memories WHERE id = ?", (mid,)).fetchone()
                 if row:
                     existing = json.loads(row["connections"])
-                    existing.append({"linked_to": to_id if mid == from_id else from_id, "relationship": rel})
-                    db.execute("UPDATE memories SET connections = ? WHERE id = ?", (json.dumps(existing), mid))
+                    target_id = to_id if mid == from_id else from_id
+                    if not any(c.get("linked_to") == target_id and c.get("relationship") == rel for c in existing):
+                        existing.append({"linked_to": target_id, "relationship": rel})
+                        db.execute("UPDATE memories SET connections = ? WHERE id = ?", (json.dumps(existing), mid))
     placeholders = ",".join("?" * len(source_ids))
     db.execute(f"UPDATE memories SET consolidated = 1 WHERE id IN ({placeholders})", source_ids)
     db.commit()
@@ -449,13 +451,15 @@ class MemoryAgent:
             mime_type, _ = mimetypes.guess_type(str(file_path))
             mime_type = mime_type or "application/octet-stream"
 
-        file_bytes = file_path.read_bytes()
-        size_mb = len(file_bytes) / (1024 * 1024)
+        # Gemini has a ~20MB inline limit; check size BEFORE reading into memory
+        size_bytes = file_path.stat().st_size
+        size_mb = size_bytes / (1024 * 1024)
 
-        # Gemini has a ~20MB inline limit; skip very large files
         if size_mb > 20:
             log.warning(f"⚠️  Skipping {file_path.name} ({size_mb:.1f}MB) — exceeds 20MB limit")
             return f"Skipped: file too large ({size_mb:.1f}MB)"
+
+        file_bytes = file_path.read_bytes()
 
         prompt = (
             f"Remember this file (source: {file_path.name}, type: {mime_type}).\n\n"
